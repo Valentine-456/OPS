@@ -19,6 +19,12 @@ bool fileExists(char *path) {
   return (stat(path, &buffer) == 0);
 }
 
+bool isRegularFile(char *path) {
+  struct stat buffer;
+  stat(path, &buffer);
+  return S_ISREG(buffer.st_mode);
+}
+
 bool getFilepath(char *path) {
   printf("Ok, enter the file path:\n");
 
@@ -31,10 +37,43 @@ bool getFilepath(char *path) {
   return fileExists(path);
 }
 
+int write_stage2(char *filepath) {
+  printf("Ok, enter information you want to write to the file:\n> ");
+  char lastChar;
+  char currentChar = '\t';
+
+  if (!isRegularFile(filepath)) {
+    showError("Provided file is not a regular file");
+    return 1;
+  }
+
+  FILE *file;
+  if ((file = fopen(filepath, "w+")) != NULL) {
+    remove(filepath);
+    fclose(file);
+  }
+  file = fopen(filepath, "ab+");
+
+  while (true) {
+    lastChar = currentChar;
+    currentChar = getchar();
+    if ((currentChar == '\n') && (lastChar == '\n')) {
+      fflush(file);
+      fclose(file);
+      printf("The End of file writing\n");
+      break;
+    }
+    fputc(toupper(currentChar), file);
+  }
+
+  return 0;
+}
+
 int interface_stage1() {
   char command;
   char buff[MAX_STRING_LENGTH];
   char filepath[MAX_STRING_LENGTH];
+
   printf("\nWelcome to CLI filemanager! Choose your command:\n");
   showOptions();
   fgets(buff, MAX_STRING_LENGTH * sizeof(char), stdin);
@@ -43,7 +82,7 @@ int interface_stage1() {
   switch (command) {
   case 'a':
     if (getFilepath(filepath))
-      printf("stage2\n");
+      write_stage2(filepath);
     else
       showError("File doesn't exist");
     break;
