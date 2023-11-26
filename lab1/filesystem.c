@@ -1,8 +1,9 @@
-#pragma once
+#define _GNU_SOURCE
 #include "./textMessages.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,104 @@ bool getFilepath(char *path) {
   }
 
   return fileExists(path);
+}
+
+ssize_t bulk_read(int fd, char *buf, size_t count) {
+  ssize_t c;
+  ssize_t len = 0;
+  do {
+    c = TEMP_FAILURE_RETRY(read(fd, buf, count));
+    if (c < 0)
+      return c;
+    if (c == 0)
+      return len; // EOF
+    buf += c;
+    len += c;
+    count -= c;
+  } while (count > 0);
+  return len;
+}
+
+ssize_t bulk_write(int fd, char *buf, size_t count) {
+  ssize_t c;
+  ssize_t len = 0;
+  do {
+    c = TEMP_FAILURE_RETRY(write(fd, buf, count));
+    if (c < 0)
+      return c;
+    buf += c;
+    len += c;
+    count -= c;
+  } while (count > 0);
+  return len;
+}
+
+void showDir(char *filepath) {
+  DIR *dir;
+  struct dirent *dp;
+  struct stat filestat;
+  char currentDir[256];
+
+  if (NULL == (dir = opendir(filepath)))
+    ERR("opendir");
+  printf("Ok, there are following files in this directory:\n");
+  getcwd(currentDir, sizeof(currentDir));
+  chdir(filepath);
+
+  do {
+    errno = 0;
+    if ((dp = readdir(dir)) != NULL) {
+      if (lstat(dp->d_name, &filestat))
+        ERR("lstat");
+      printf("-  %s \n", dp->d_name);
+    }
+  } while (dp != NULL);
+
+  chdir(currentDir);
+  closedir(dir);
+}
+
+void showFile(char *filepath) {
+  const int fd = open(filepath, O_RDONLY);
+  if (fd == -1)
+    ERR("open");
+  char file_buf[256];
+  struct stat filestat;
+
+  for (;;) {
+    const ssize_t read_size = bulk_read(fd, file_buf, 256);
+    if (read_size == -1)
+      ERR("bulk_read");
+
+    if (read_size == 0)
+      break;
+
+    if (bulk_write(1, file_buf, read_size) == -1)
+      ERR("bulk_write");
+  }
+
+  if (close(fd) == -1)
+    ERR("close");
+
+  lstat(filepath, &filestat);
+  printf("\nSize: %ld bytes \n", filestat.st_size);
+  printf("Group ID: %d\n", filestat.st_gid);
+  printf("User ID: %d\n", filestat.st_uid);
+}
+
+int show_stage3(char *filepath) {
+  struct stat buffer;
+  stat(filepath, &buffer);
+
+  if (S_ISDIR(buffer.st_mode)) {
+    showDir(filepath);
+  } else if (S_ISREG(buffer.st_mode)) {
+    showFile(filepath);
+  } else {
+    showError("Type of the file is unknown");
+  }
+
+  return 0;
 }
 
 int write_stage2(char *filepath) {
@@ -87,7 +186,10 @@ int interface_stage1() {
       showError("File doesn't exist");
     break;
   case 'b':
-    printf("show\n");
+    if (getFilepath(filepath))
+      show_stage3(filepath);
+    else
+      showError("File doesn't exist");
     break;
   case 'c':
     printf("walk\n");
