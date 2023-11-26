@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,6 +122,29 @@ void showFile(char *filepath) {
   printf("User ID: %d\n", filestat.st_uid);
 }
 
+display_info(const char *fpath, const struct stat *sb, int tflag,
+             struct FTW *ftwbuf) {
+  for (int i = 0; i < ftwbuf->level; i++)
+    printf(" ");
+  if (S_ISDIR(sb->st_mode))
+    printf("+");
+  else
+    printf(" ");
+
+  printf("%s\n", basename(fpath));
+  return 0;
+}
+
+int walk_stage4(char *filepath) {
+  int flags = 0;
+  flags |= FTW_PHYS;
+
+  if (nftw(filepath, display_info, 20, flags) == -1) {
+    perror("nftw");
+    exit(EXIT_FAILURE);
+  }
+}
+
 int show_stage3(char *filepath) {
   struct stat buffer;
   stat(filepath, &buffer);
@@ -192,7 +216,10 @@ int interface_stage1() {
       showError("File doesn't exist");
     break;
   case 'c':
-    printf("walk\n");
+    if (getFilepath(filepath))
+      walk_stage4(filepath);
+    else
+      showError("File doesn't exist");
     break;
   case 'd':
     return 0;
