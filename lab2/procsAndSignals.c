@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -8,21 +9,39 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <asm-generic/signal-defs.h>
 
 #define ERR(source)                                                            \
   (fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), perror(source),             \
    kill(0, SIGKILL), exit(EXIT_FAILURE))
 
-// void sethandler(void (*f)(int), int sigNo) {
-//   struct sigaction act;
-//   memset(&act, 0, sizeof(struct sigaction));
-//   act.sa_handler = f;
-//   if (-1 == sigaction(sigNo, &act, NULL))
-//     ERR("sigaction");
-// }
+#define UNUSED(x) (void)(x)
 
-// parentSIGHandling(int param) {}
+volatile sig_atomic_t taskAccepted = 0;
+
+void sethandler(void (*f)(int, siginfo_t *, void *), int sigNo) {
+  struct sigaction act;
+  memset(&act, 0, sizeof(struct sigaction));
+  act.sa_sigaction = f;
+  act.sa_flags = SA_SIGINFO;
+
+  if (-1 == sigaction(sigNo, &act, NULL))
+    ERR("sigaction");
+}
+
+void parentSIGHandling(int sig, siginfo_t *siginfo, void *ucontext) {
+  UNUSED(sig);
+  UNUSED(ucontext);
+  write(1, "Teacher has accepted solution of a student\n", 44);
+  if (kill(siginfo->si_pid, SIGUSR2))
+    ERR("kill");
+}
+
+void childSIGHandling(int sig, siginfo_t *siginfo, void *ucontext) {
+  UNUSED(sig);
+  UNUSED(siginfo);
+  UNUSED(ucontext);
+  taskAccepted = sig;
+}
 
 void millisleep(int millis) {
   struct timespec time;
@@ -52,7 +71,12 @@ void child_work(int p, int t, int probability) {
     }
     printf("Student [%d] has finished doing part %d of %d!\n", getpid(), i + 1,
            p);
-    kill(getppid(), SIGUSR1);
+
+    while (taskAccepted != SIGUSR2) {
+      kill(getppid(), SIGUSR1);
+      millisleep(10);
+    }
+    taskAccepted = 0;
   }
   printf("Student [%d] has finished the task, having %d issues!\n", getpid(),
          issues);
@@ -64,6 +88,7 @@ void create_children(int argc, char *argv[]) {
   for (int i = 3; i < argc; i++) {
     switch (fork()) {
     case 0:
+      sethandler(childSIGHandling, SIGUSR2);
       child_work(p, t, atoi(argv[i]));
       exit(EXIT_SUCCESS);
     case -1:
@@ -93,15 +118,25 @@ int main(int argc, char *argv[]) {
       return 1;
     }
   }
-
-  sigset_t mask;
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGUSR1);
-  sigaddset(&mask, SIGUSR2);
-  sigprocmask(SIG_BLOCK, &mask, NULL);
-
   create_children(argc, argv);
-  while (wait(NULL) > 0)
-    ;
+  sethandler(parentSIGHandling, SIGUSR1);
+
+  int n = argc - 3;
+  while (n > 0) {
+    millisleep(1000);
+    pid_t pid;
+    for (;;) {
+      pid = waitpid(0, NULL, WNOHANG);
+      if (pid > 0)
+        n--;
+      if (0 == pid)
+        break;
+      if (0 >= pid) {
+        if (ECHILD == errno)
+          break;
+        ERR("waitpid:");
+      }
+    }
+  }
   return 0;
 }
