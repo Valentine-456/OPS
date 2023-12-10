@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,14 +8,54 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <asm-generic/signal-defs.h>
 
 #define ERR(source)                                                            \
   (fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), perror(source),             \
    kill(0, SIGKILL), exit(EXIT_FAILURE))
 
+// void sethandler(void (*f)(int), int sigNo) {
+//   struct sigaction act;
+//   memset(&act, 0, sizeof(struct sigaction));
+//   act.sa_handler = f;
+//   if (-1 == sigaction(sigNo, &act, NULL))
+//     ERR("sigaction");
+// }
+
+// parentSIGHandling(int param) {}
+
+void millisleep(int millis) {
+  struct timespec time;
+  time.tv_sec = 0;
+  time.tv_nsec = millis * 1000000;
+  nanosleep(&time, NULL);
+}
+
+int randBinaryVariable(int chance) {
+  int result = (rand() % (100 - 0 + 1)) + 0;
+  return result < chance;
+}
+
 void child_work(int p, int t, int probability) {
+  int issues = 0;
   printf("Student [%d] with probability %d has started doing task!\n", getpid(),
          probability);
+
+  for (int i = 0; i < p; i++) {
+    printf("Student [%d] started doing part %d of %d!\n", getpid(), i + 1, p);
+    for (int j = 0; j < t; j++) {
+      millisleep(100);
+      if (randBinaryVariable(probability)) {
+        printf("Student [%d] has issue (%d) doing task\n", getpid(), ++issues);
+        millisleep(50);
+      }
+    }
+    printf("Student [%d] has finished doing part %d of %d!\n", getpid(), i + 1,
+           p);
+    kill(getppid(), SIGUSR1);
+  }
+  printf("Student [%d] has finished the task, having %d issues!\n", getpid(),
+         issues);
 }
 
 void create_children(int argc, char *argv[]) {
@@ -52,6 +93,12 @@ int main(int argc, char *argv[]) {
       return 1;
     }
   }
+
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+  sigaddset(&mask, SIGUSR2);
+  sigprocmask(SIG_BLOCK, &mask, NULL);
 
   create_children(argc, argv);
   while (wait(NULL) > 0)
