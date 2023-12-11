@@ -19,8 +19,15 @@
 typedef struct {
   int *array;
   int arraySize;
-  pthread_mutex_t *mainMXptr;
+  pthread_mutex_t *arrayMx;
 } PrintThreadParams;
+
+typedef struct {
+  int *array;
+  int arraySize;
+  pthread_mutex_t *arrayMx;
+  int *threadCurrentStatus;
+} SwapThreadParams;
 
 volatile sig_atomic_t swapSignal = 0;
 volatile sig_atomic_t printSignal = 0;
@@ -35,7 +42,7 @@ void sethandler(void (*f)(int), int sigNo) {
     ERR("sigaction");
 }
 
-void sigusr1Handler(int sig) { swapSignal = sig; }
+void sigusr1Handler(int sig) { swapSignal += 1; }
 void sigusr2Handler(int sig) { printSignal = sig; }
 
 void ReadArguments(int argc, char **argv, int *n, int *p) {
@@ -69,40 +76,45 @@ void millisleep(int millis) {
   nanosleep(&time, NULL);
 }
 
-void SwapRoutine(int *array, pthread_mutex_t *arrayMx,
-                 pthread_mutex_t *mainMXptr, int n) {
+void *SwapRoutine(void *voidParam) {
+  SwapThreadParams *params = (SwapThreadParams *)voidParam;
   srand(time(NULL));
-  swapSignal = 0;
-  int a = rand() % n;
-  int b = rand() % n;
+  int a = rand() % params->arraySize;
+  int b = rand() % params->arraySize;
   while (a == b) {
-    b = rand() % n;
+    b = rand() % params->arraySize;
   }
   if (a > b)
     swap(&a, &b);
   printf("a: %d, b: %d\n", a, b);
 
-  pthread_mutex_lock(mainMXptr);
   for (int i = 0; i < floor((b - a - 1) / 2); i++) {
-    pthread_mutex_lock(&arrayMx[a + i]);
-    pthread_mutex_lock(&arrayMx[b - i]);
-    swap(&array[a + i], &array[b - i]);
-    printf("Swaped %d and %d\n", array[a + i], array[b - i]);
-    millisleep(5);
-    pthread_mutex_unlock(&arrayMx[a + i]);
-    pthread_mutex_unlock(&arrayMx[b - i]);
+    pthread_mutex_lock(&params->arrayMx[a + i]);
+    pthread_mutex_lock(&params->arrayMx[b - i]);
+    swap(&params->array[a + i], &params->array[b - i]);
+    printf("Swaped %d and %d\n", params->array[a + i], params->array[b - i]);
+    millisleep(50);
+    pthread_mutex_unlock(&params->arrayMx[a + i]);
+    pthread_mutex_unlock(&params->arrayMx[b - i]);
   }
-  pthread_mutex_unlock(mainMXptr);
+  *params->threadCurrentStatus = 0;
+  free(params);
+  return;
 }
 
 void *PrintRoutine(void *voidParam) {
   PrintThreadParams *params = (PrintThreadParams *)voidParam;
-  pthread_mutex_lock(params->mainMXptr);
+  for (int i = 0; i < params->arraySize; i++) {
+    pthread_mutex_lock(&params->arrayMx[i]);
+  }
   printf("Array:\n");
   for (int i = 0; i < params->arraySize; i++) {
     printf("%d\n", params->array[i]);
   }
-  pthread_mutex_unlock(params->mainMXptr);
+  for (int i = 0; i < params->arraySize; i++) {
+    pthread_mutex_unlock(&params->arrayMx[i]);
+  }
+  free(params);
   return;
 }
 
@@ -112,20 +124,18 @@ int main(int argc, char **argv) {
   int *array = (int *)malloc(sizeof(int) * n);
   pthread_mutex_t *arrayMx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t) * n);
-  pthread_mutex_t *mainMXptr =
-      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-  pthread_mutex_t mainMX = *mainMXptr;
-  pthread_mutex_init(mainMXptr, NULL);
-
   for (int i = 0; i < n; i++) {
     array[i] = i;
     pthread_mutex_init(&(arrayMx[i]), NULL);
+  }
+  int *threadsStatuses = (int *)malloc(sizeof(int) * p);
+  for (int i = 0; i < p; i++) {
+    threadsStatuses[i] = 0;
   }
 
   sethandler(sigusr1Handler, SIGUSR1);
   sethandler(sigusr2Handler, SIGUSR2);
   while (true) {
-    millisleep(10);
     if (printSignal == SIGUSR2) {
       pthread_t tid;
       pthread_attr_t attr;
@@ -134,17 +144,42 @@ int main(int argc, char **argv) {
       PrintThreadParams *param =
           (PrintThreadParams *)malloc(sizeof(PrintThreadParams));
       param->array = array;
-      param->mainMXptr = &mainMX;
+      param->arrayMx = arrayMx;
       param->arraySize = n;
       pthread_create(&tid, &attr, PrintRoutine, param);
       printSignal = 0;
     }
-    if (swapSignal == SIGUSR1) {
-      SwapRoutine(array, arrayMx, &mainMX, n);
+    if (swapSignal > 0) {
+      bool hasVacantThread = false;
+      int *vacantThreadStatusPtr;
+      for (int i = 0; i < p; i++) {
+        if (threadsStatuses[i] == 0) {
+          threadsStatuses[i] = 1;
+          vacantThreadStatusPtr = &threadsStatuses[i];
+          hasVacantThread = true;
+          break;
+        }
+      }
+      if (hasVacantThread) {
+        pthread_t tid;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        SwapThreadParams *param =
+            (SwapThreadParams *)malloc(sizeof(SwapThreadParams));
+        param->array = array;
+        param->arrayMx = arrayMx;
+        param->arraySize = n;
+        param->threadCurrentStatus = vacantThreadStatusPtr;
+        pthread_create(&tid, &attr, SwapRoutine, param);
+      } else {
+        printf("All threads are busy right now\n");
+      }
+      swapSignal--;
     }
   }
 
   free(arrayMx);
   free(array);
+  free(threadsStatuses);
   return 0;
 }
