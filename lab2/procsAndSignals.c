@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -15,6 +16,11 @@
    kill(0, SIGKILL), exit(EXIT_FAILURE))
 
 #define UNUSED(x) (void)(x)
+
+typedef struct {
+  int issues;
+  pid_t pid;
+} Students;
 
 volatile sig_atomic_t taskAccepted = 0;
 
@@ -31,7 +37,7 @@ void sethandler(void (*f)(int, siginfo_t *, void *), int sigNo) {
 void parentSIGHandling(int sig, siginfo_t *siginfo, void *ucontext) {
   UNUSED(sig);
   UNUSED(ucontext);
-  write(1, "Teacher has accepted solution of a student\n", 44);
+  write(1, "Teacher has accepted solution of a student!\n", 45);
   if (kill(siginfo->si_pid, SIGUSR2))
     ERR("kill");
 }
@@ -55,7 +61,8 @@ int randBinaryVariable(int chance) {
   return result < chance;
 }
 
-void child_work(int p, int t, int probability) {
+int child_work(int p, int t, int probability) {
+  srand(time(NULL) * getpid());
   int issues = 0;
   printf("Student [%d] with probability %d has started doing task!\n", getpid(),
          probability);
@@ -80,20 +87,25 @@ void child_work(int p, int t, int probability) {
   }
   printf("Student [%d] has finished the task, having %d issues!\n", getpid(),
          issues);
+  return issues;
 }
 
-void create_children(int argc, char *argv[]) {
+void create_children(int argc, char *argv[], Students data[]) {
   int p = atoi(argv[1]);
   int t = atoi(argv[2]);
   for (int i = 3; i < argc; i++) {
-    switch (fork()) {
+    int pid;
+    switch (pid = fork()) {
     case 0:
       sethandler(childSIGHandling, SIGUSR2);
-      child_work(p, t, atoi(argv[i]));
-      exit(EXIT_SUCCESS);
+      int issuesCounter = child_work(p, t, atoi(argv[i]));
+      exit(issuesCounter);
     case -1:
       perror("Fork:");
       exit(EXIT_FAILURE);
+    default:
+      data[i - 3].pid = pid;
+      data[i - 3].issues = 0;
     }
   }
 }
@@ -118,17 +130,27 @@ int main(int argc, char *argv[]) {
       return 1;
     }
   }
-  create_children(argc, argv);
+  int n = argc - 3;
+  Students *students = malloc(sizeof(Students) * n);
+
+  create_children(argc, argv, students);
   sethandler(parentSIGHandling, SIGUSR1);
 
-  int n = argc - 3;
   while (n > 0) {
-    millisleep(1000);
+    // millisleep(1000);
+    int issuesExitStatus;
     pid_t pid;
     for (;;) {
-      pid = waitpid(0, NULL, WNOHANG);
-      if (pid > 0)
+      pid = waitpid(0, &issuesExitStatus, WNOHANG);
+      if (pid > 0) {
+        for (int i = 0; i < argc - 3; i++) {
+          if (students[i].pid == pid) {
+            students[i].issues += WEXITSTATUS(issuesExitStatus);
+            break;
+          }
+        }
         n--;
+      }
       if (0 == pid)
         break;
       if (0 >= pid) {
@@ -138,5 +160,12 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+
+  printf("Number |  ID   | Issues\n");
+  for (int i = 0; i < argc - 3; i++) {
+    printf("%6d | %5d | %5d\n", i + 1, students[i].pid, students[i].issues);
+  }
+  free(students);
+
   return 0;
 }
