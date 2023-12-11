@@ -11,3 +11,7 @@ This repository contains my solutions and implementations for the labs assigned 
 - **Lab 2: Processes, signals, file descriptors**
   - Description: Write a program using POSIX standard laboratory classes: thereis a main process a teacher and n child processes - students.
   - Files: `lab2/`
+
+- **Lab 3: Threads, mutexes and signals**
+  - Description: Write a program which performs parallel operations over an array of integers. Think about locking order to ensure operations safety and avoid deadlocks.
+  - Files: `lab3/`
