@@ -80,6 +80,7 @@ void SwapRoutine(int *array, pthread_mutex_t *arrayMx,
     pthread_mutex_lock(&arrayMx[b - i]);
     swap(&array[a + i], &array[b - i]);
     printf("Swaped %d and %d\n", array[a + i], array[b - i]);
+    millisleep(5);
     pthread_mutex_unlock(&arrayMx[a + i]);
     pthread_mutex_unlock(&arrayMx[b - i]);
   }
