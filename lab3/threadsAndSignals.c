@@ -16,7 +16,14 @@
   (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__),             \
    exit(EXIT_FAILURE))
 
-volatile sig_atomic_t lastSignal = 0;
+typedef struct {
+  int *array;
+  int arraySize;
+  pthread_mutex_t *mainMXptr;
+} PrintThreadParams;
+
+volatile sig_atomic_t swapSignal = 0;
+volatile sig_atomic_t printSignal = 0;
 
 void sethandler(void (*f)(int), int sigNo) {
   struct sigaction act;
@@ -28,7 +35,8 @@ void sethandler(void (*f)(int), int sigNo) {
     ERR("sigaction");
 }
 
-void sigusr1Handler(int sig) { lastSignal = sig; }
+void sigusr1Handler(int sig) { swapSignal = sig; }
+void sigusr2Handler(int sig) { printSignal = sig; }
 
 void ReadArguments(int argc, char **argv, int *n, int *p) {
   if (argc == 3) {
@@ -64,7 +72,7 @@ void millisleep(int millis) {
 void SwapRoutine(int *array, pthread_mutex_t *arrayMx,
                  pthread_mutex_t *mainMXptr, int n) {
   srand(time(NULL));
-  lastSignal = 0;
+  swapSignal = 0;
   int a = rand() % n;
   int b = rand() % n;
   while (a == b) {
@@ -87,13 +95,27 @@ void SwapRoutine(int *array, pthread_mutex_t *arrayMx,
   pthread_mutex_unlock(mainMXptr);
 }
 
+void *PrintRoutine(void *voidParam) {
+  PrintThreadParams *params = (PrintThreadParams *)voidParam;
+  pthread_mutex_lock(params->mainMXptr);
+  printf("Array:\n");
+  for (int i = 0; i < params->arraySize; i++) {
+    printf("%d\n", params->array[i]);
+  }
+  pthread_mutex_unlock(params->mainMXptr);
+  return;
+}
+
 int main(int argc, char **argv) {
   int n, p;
   ReadArguments(argc, argv, &n, &p);
   int *array = (int *)malloc(sizeof(int) * n);
   pthread_mutex_t *arrayMx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t) * n);
-  pthread_mutex_t mainMX = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_t *mainMXptr =
+      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  pthread_mutex_t mainMX = *mainMXptr;
+  pthread_mutex_init(mainMXptr, NULL);
 
   for (int i = 0; i < n; i++) {
     array[i] = i;
@@ -101,13 +123,28 @@ int main(int argc, char **argv) {
   }
 
   sethandler(sigusr1Handler, SIGUSR1);
+  sethandler(sigusr2Handler, SIGUSR2);
   while (true) {
-    millisleep(400);
-    if (lastSignal == SIGUSR1) {
+    millisleep(10);
+    if (printSignal == SIGUSR2) {
+      pthread_t tid;
+      pthread_attr_t attr;
+      pthread_attr_init(&attr);
+      pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+      PrintThreadParams *param =
+          (PrintThreadParams *)malloc(sizeof(PrintThreadParams));
+      param->array = array;
+      param->mainMXptr = &mainMX;
+      param->arraySize = n;
+      pthread_create(&tid, &attr, PrintRoutine, param);
+      printSignal = 0;
+    }
+    if (swapSignal == SIGUSR1) {
       SwapRoutine(array, arrayMx, &mainMX, n);
     }
   }
 
+  free(arrayMx);
   free(array);
   return 0;
 }
